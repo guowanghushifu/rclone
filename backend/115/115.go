@@ -115,6 +115,7 @@ type Object struct {
 // deserve to be retried.  It returns the err as a convenience
 func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
 	// TODO: impl
+	fs.Errorf(nil, "Should retry: %v", err)
 	return false, err
 }
 
