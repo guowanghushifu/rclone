@@ -1019,10 +1019,12 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 // Open opens the file for read.  Call Close() on the returned io.ReadCloser
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	fs.Logf(o.fs, "open %v, options: %v", o.remote, options)
-	for i, option := range options {
-		switch x := option.(type) {
-		case *RangeOption:
-			fs.Logf(o.fs, "[SIZE]: %v (MB)", (x.End - x.Start)/1024/1024)
+	for _, option := range options {
+		if x, ok := option.(*fs.RangeOption); ok {
+			start := x.Start
+			end := x.End
+			size := (end - start)/1024/1024
+			fs.Logf(o.fs, "[SIZE]: %v (MB)", size)
 		}
 	}
 
