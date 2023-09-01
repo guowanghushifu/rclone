@@ -31,7 +31,7 @@ import (
 
 const (
 	domain      = "www.115.com"
-	userAgent   = "Mozilla/5.0; 115Desktop/2.0.3.6"
+	userAgent   = "Mozilla/5.0 115Desktop/2.0.3.6"
 	ossEndpoint = "https://oss-cn-shenzhen.aliyuncs.com"
 
 	uploadSizeLimit = 5 * 1024 * 1024 * 1024
