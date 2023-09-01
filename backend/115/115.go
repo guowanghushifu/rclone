@@ -31,7 +31,7 @@ import (
 
 const (
 	domain      = "www.115.com"
-	userAgent   = "Mozilla/5.0 115Browser/23.9.3.2"
+	userAgent   = "Mozilla/5.0; 115Desktop/2.0.3.6"
 	ossEndpoint = "https://oss-cn-shenzhen.aliyuncs.com"
 
 	uploadSizeLimit = 5 * 1024 * 1024 * 1024
@@ -1023,7 +1023,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		if x, ok := option.(*fs.RangeOption); ok {
 			start := x.Start
 			end := x.End
-			size := (end - start)/1024/1024
+			size := (end - start) / 1024 / 1024
 			fs.Logf(o.fs, "[SIZE]: %v (MB)", size)
 		}
 	}
