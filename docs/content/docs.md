@@ -66,7 +66,9 @@ See the following for detailed instructions for
   * [PikPak](/pikpak/)
   * [premiumize.me](/premiumizeme/)
   * [put.io](/putio/)
+  * [Proton Drive](/protondrive/)
   * [QingStor](/qingstor/)
+  * [Quatrix by Maytech](/quatrix/)
   * [Seafile](/seafile/)
   * [SFTP](/sftp/)
   * [Sia](/sia/)
@@ -350,6 +352,10 @@ different character encoding, you must be cautious to use characters that are
 possible to write in all of them. This is mostly a problem on Windows, where
 the console traditionally uses a non-Unicode character set - defined
 by the so-called "code page".
+
+Do not use single character names on Windows as it creates ambiguity with Windows
+drives' names, e.g.: remote called `C` is indistinguishable from `C` drive. Rclone
+will always assume that single letter name refers to a drive.
 
 Quoting and the shell
 ---------------------
@@ -640,6 +646,9 @@ Local address to bind to for outgoing connections.  This can be an
 IPv4 address (1.2.3.4), an IPv6 address (1234::789A) or host name.  If
 the host name doesn't resolve or resolves to more than one IP address
 it will give an error.
+
+You can use `--bind 0.0.0.0` to force rclone to use IPv4 addresses and
+`--bind ::0` to force rclone to use IPv6 addresses.
 
 ### --bwlimit=BANDWIDTH_SPEC ###
 
@@ -1514,12 +1523,12 @@ This command line flag allows you to override that computed default.
 
 ### --multi-thread-write-buffer-size=SIZE ###
 
-When downloading with multiple threads, rclone will buffer SIZE bytes in
-memory before writing to disk for each thread.
+When transferring with multiple threads, rclone will buffer SIZE bytes
+in memory before writing to disk for each thread.
 
 This can improve performance if the underlying filesystem does not deal
 well with a lot of small writes in different positions of the file, so
-if you see downloads being limited by disk write speed, you might want
+if you see transfers being limited by disk write speed, you might want
 to experiment with different values. Specially for magnetic drives and
 remote file systems a higher value can be useful.
 
@@ -1533,22 +1542,23 @@ multiples of 16k performed much better than other values.
 
 ### --multi-thread-chunk-size=SizeSuffix ###
 
-Normally the chunk size for multi thread copies is set by the backend.
-However some backends such as `local` and `smb` (which implement
-`OpenWriterAt` but not `OpenChunkWriter`) don't have a natural chunk
-size.
+Normally the chunk size for multi thread transfers is set by the backend.
+However some backends such as `local` and `smb` (which implement `OpenWriterAt`
+but not `OpenChunkWriter`) don't have a natural chunk size.
 
 In this case the value of this option is used (default 64Mi).
 
-### --multi-thread-cutoff=SIZE ###
+### --multi-thread-cutoff=SIZE {#multi-thread-cutoff}
 
-When transferring files to capable backends above this size, rclone
-will use multiple threads to download the file (default 256M).
+When transferring files above SIZE to capable backends, rclone will
+use multiple threads to transfer the file (default 256M).
 
 Capable backends are marked in the
 [overview](/overview/#optional-features) as `MultithreadUpload`. (They
-need to implement either `OpenWriterAt` or `OpenChunkedWriter`). These
-include include, `local`, `s3`, `azureblob`, `b2` and `smb`.
+need to implement either the `OpenWriterAt` or `OpenChunkedWriter`
+internal interfaces). These include include, `local`, `s3`,
+`azureblob`, `b2`, `oracleobjectstorage` and `smb` at the time of
+writing.
 
 On the local disk, rclone preallocates the file (using
 `fallocate(FALLOC_FL_KEEP_SIZE)` on unix or `NTSetInformationFile` on
@@ -1567,8 +1577,8 @@ This will work with the `sync`/`copy`/`move` commands and friends
 mount` and `rclone serve` if `--vfs-cache-mode` is set to `writes` or
 above.
 
-**NB** that this **only** works supported backends as the destination
-but will work with any backend as the source.
+**NB** that this **only** works with supported backends as the
+destination but will work with any backend as the source.
 
 **NB** that multi-thread copies are disabled for local to local copies
 as they are faster without unless `--multi-thread-streams` is set
@@ -1577,14 +1587,19 @@ explicitly.
 **NB** on Windows using multi-thread transfers to the local disk will
 cause the resulting files to be [sparse](https://en.wikipedia.org/wiki/Sparse_file).
 Use `--local-no-sparse` to disable sparse files (which may cause long
-delays at the start of downloads) or disable multi-thread downloads
+delays at the start of transfers) or disable multi-thread transfers
 with `--multi-thread-streams 0`
 
 ### --multi-thread-streams=N ###
 
-When using multi thread downloads (see above `--multi-thread-cutoff`)
+When using multi thread transfers (see above `--multi-thread-cutoff`)
 this sets the number of streams to use. Set to `0` to disable multi
-thread downloads (Default 4).
+thread transfers (Default 4).
+
+If the backend has a `--backend-upload-concurrency` setting (eg
+`--s3-upload-concurrency`) then this setting will be used as the
+number of transfers instead if it is larger than the value of
+`--multi-thread-streams` or `--multi-thread-streams` isn't set.
 
 ### --no-check-dest ###
 

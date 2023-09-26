@@ -62,11 +62,132 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
+// The S3 providers
+//
+// Please keep these in alphabetical order, but with AWS first and
+// Other last.
+//
+// NB if you add a new provider here, then add it in the setQuirks
+// function and set the correct quirks. Test the quirks are correct by
+// running the integration tests "go test -v -remote NewS3Provider:".
+//
+// See https://github.com/rclone/rclone/blob/master/CONTRIBUTING.md#adding-a-new-s3-provider
+// for full information about how to add a new s3 provider.
+var providerOption = fs.Option{
+	Name: fs.ConfigProvider,
+	Help: "Choose your S3 provider.",
+	Examples: []fs.OptionExample{{
+		Value: "AWS",
+		Help:  "Amazon Web Services (AWS) S3",
+	}, {
+		Value: "Alibaba",
+		Help:  "Alibaba Cloud Object Storage System (OSS) formerly Aliyun",
+	}, {
+		Value: "ArvanCloud",
+		Help:  "Arvan Cloud Object Storage (AOS)",
+	}, {
+		Value: "Ceph",
+		Help:  "Ceph Object Storage",
+	}, {
+		Value: "ChinaMobile",
+		Help:  "China Mobile Ecloud Elastic Object Storage (EOS)",
+	}, {
+		Value: "Cloudflare",
+		Help:  "Cloudflare R2 Storage",
+	}, {
+		Value: "DigitalOcean",
+		Help:  "DigitalOcean Spaces",
+	}, {
+		Value: "Dreamhost",
+		Help:  "Dreamhost DreamObjects",
+	}, {
+		Value: "GCS",
+		Help:  "Google Cloud Storage",
+	}, {
+		Value: "HuaweiOBS",
+		Help:  "Huawei Object Storage Service",
+	}, {
+		Value: "IBMCOS",
+		Help:  "IBM COS S3",
+	}, {
+		Value: "IDrive",
+		Help:  "IDrive e2",
+	}, {
+		Value: "IONOS",
+		Help:  "IONOS Cloud",
+	}, {
+		Value: "LyveCloud",
+		Help:  "Seagate Lyve Cloud",
+	}, {
+		Value: "Leviia",
+		Help:  "Leviia Object Storage",
+	}, {
+		Value: "Liara",
+		Help:  "Liara Object Storage",
+	}, {
+		Value: "Linode",
+		Help:  "Linode Object Storage",
+	}, {
+		Value: "Minio",
+		Help:  "Minio Object Storage",
+	}, {
+		Value: "Netease",
+		Help:  "Netease Object Storage (NOS)",
+	}, {
+		Value: "Petabox",
+		Help:  "Petabox Object Storage",
+	}, {
+		Value: "RackCorp",
+		Help:  "RackCorp Object Storage",
+	}, {
+		Value: "Scaleway",
+		Help:  "Scaleway Object Storage",
+	}, {
+		Value: "SeaweedFS",
+		Help:  "SeaweedFS S3",
+	}, {
+		Value: "StackPath",
+		Help:  "StackPath Object Storage",
+	}, {
+		Value: "Storj",
+		Help:  "Storj (S3 Compatible Gateway)",
+	}, {
+		Value: "Synology",
+		Help:  "Synology C2 Object Storage",
+	}, {
+		Value: "TencentCOS",
+		Help:  "Tencent Cloud Object Storage (COS)",
+	}, {
+		Value: "Wasabi",
+		Help:  "Wasabi Object Storage",
+	}, {
+		Value: "Qiniu",
+		Help:  "Qiniu Object Storage (Kodo)",
+	}, {
+		Value: "Other",
+		Help:  "Any other S3 compatible provider",
+	}},
+}
+
+var providersList string
+
 // Register with Fs
 func init() {
+	var s strings.Builder
+	for i, provider := range providerOption.Examples {
+		if provider.Value == "Other" {
+			_, _ = s.WriteString(" and others")
+		} else {
+			if i != 0 {
+				_, _ = s.WriteString(", ")
+			}
+			_, _ = s.WriteString(provider.Value)
+		}
+	}
+	providersList = s.String()
 	fs.Register(&fs.RegInfo{
 		Name:        "s3",
-		Description: "Amazon S3 Compliant Storage Providers including AWS, Alibaba, ArvanCloud, Ceph, China Mobile, Cloudflare, GCS, DigitalOcean, Dreamhost, Huawei OBS, IBM COS, IDrive e2, IONOS Cloud, Leviia, Liara, Lyve Cloud, Minio, Netease, Petabox, RackCorp, Scaleway, SeaweedFS, StackPath, Storj, Synology, Tencent COS, Qiniu and Wasabi",
+		Description: "Amazon S3 Compliant Storage Providers including " + providersList,
 		NewFs:       NewFs,
 		CommandHelp: commandHelp,
 		Config: func(ctx context.Context, name string, m configmap.Mapper, config fs.ConfigIn) (*fs.ConfigOut, error) {
@@ -80,100 +201,7 @@ func init() {
 			System: systemMetadataInfo,
 			Help:   `User metadata is stored as x-amz-meta- keys. S3 metadata keys are case insensitive and are always returned in lower case.`,
 		},
-		Options: []fs.Option{{
-			Name: fs.ConfigProvider,
-			Help: "Choose your S3 provider.",
-			// NB if you add a new provider here, then add it in the
-			// setQuirks function and set the correct quirks
-			Examples: []fs.OptionExample{{
-				Value: "AWS",
-				Help:  "Amazon Web Services (AWS) S3",
-			}, {
-				Value: "Alibaba",
-				Help:  "Alibaba Cloud Object Storage System (OSS) formerly Aliyun",
-			}, {
-				Value: "ArvanCloud",
-				Help:  "Arvan Cloud Object Storage (AOS)",
-			}, {
-				Value: "Ceph",
-				Help:  "Ceph Object Storage",
-			}, {
-				Value: "ChinaMobile",
-				Help:  "China Mobile Ecloud Elastic Object Storage (EOS)",
-			}, {
-				Value: "Cloudflare",
-				Help:  "Cloudflare R2 Storage",
-			}, {
-				Value: "DigitalOcean",
-				Help:  "DigitalOcean Spaces",
-			}, {
-				Value: "Dreamhost",
-				Help:  "Dreamhost DreamObjects",
-			}, {
-				Value: "GCS",
-				Help:  "Google Cloud Storage",
-			}, {
-				Value: "HuaweiOBS",
-				Help:  "Huawei Object Storage Service",
-			}, {
-				Value: "IBMCOS",
-				Help:  "IBM COS S3",
-			}, {
-				Value: "IDrive",
-				Help:  "IDrive e2",
-			}, {
-				Value: "IONOS",
-				Help:  "IONOS Cloud",
-			}, {
-				Value: "LyveCloud",
-				Help:  "Seagate Lyve Cloud",
-			}, {
-				Value: "Leviia",
-				Help:  "Leviia Object Storage",
-			}, {
-				Value: "Liara",
-				Help:  "Liara Object Storage",
-			}, {
-				Value: "Minio",
-				Help:  "Minio Object Storage",
-			}, {
-				Value: "Netease",
-				Help:  "Netease Object Storage (NOS)",
-			}, {
-				Value: "Petabox",
-				Help:  "Petabox Object Storage",
-			}, {
-				Value: "RackCorp",
-				Help:  "RackCorp Object Storage",
-			}, {
-				Value: "Scaleway",
-				Help:  "Scaleway Object Storage",
-			}, {
-				Value: "SeaweedFS",
-				Help:  "SeaweedFS S3",
-			}, {
-				Value: "StackPath",
-				Help:  "StackPath Object Storage",
-			}, {
-				Value: "Storj",
-				Help:  "Storj (S3 Compatible Gateway)",
-			}, {
-				Value: "Synology",
-				Help:  "Synology C2 Object Storage",
-			}, {
-				Value: "TencentCOS",
-				Help:  "Tencent Cloud Object Storage (COS)",
-			}, {
-				Value: "Wasabi",
-				Help:  "Wasabi Object Storage",
-			}, {
-				Value: "Qiniu",
-				Help:  "Qiniu Object Storage (Kodo)",
-			}, {
-				Value: "Other",
-				Help:  "Any other S3 compatible provider",
-			}},
-		}, {
+		Options: []fs.Option{providerOption, {
 			Name:    "env_auth",
 			Help:    "Get AWS credentials from runtime (environment variables or EC2/ECS meta data if no env vars).\n\nOnly applies if access_key_id and secret_access_key is blank.",
 			Default: false,
@@ -494,7 +522,7 @@ func init() {
 		}, {
 			Name:     "region",
 			Help:     "Region to connect to.\n\nLeave blank if you are using an S3 clone and you don't have a region.",
-			Provider: "!AWS,Alibaba,ArvanCloud,ChinaMobile,Cloudflare,IONOS,Petabox,Liara,Qiniu,RackCorp,Scaleway,Storj,Synology,TencentCOS,HuaweiOBS,IDrive",
+			Provider: "!AWS,Alibaba,ArvanCloud,ChinaMobile,Cloudflare,IONOS,Petabox,Liara,Linode,Qiniu,RackCorp,Scaleway,Storj,Synology,TencentCOS,HuaweiOBS,IDrive",
 			Examples: []fs.OptionExample{{
 				Value: "",
 				Help:  "Use this if unsure.\nWill use v4 signatures and an empty region.",
@@ -862,6 +890,42 @@ func init() {
 				Help:  "The default endpoint\nIran",
 			}},
 		}, {
+			// Linode endpoints: https://www.linode.com/docs/products/storage/object-storage/guides/urls/#cluster-url-s3-endpoint
+			Name:     "endpoint",
+			Help:     "Endpoint for Linode Object Storage API.",
+			Provider: "Linode",
+			Examples: []fs.OptionExample{{
+				Value: "us-southeast-1.linodeobjects.com",
+				Help:  "Atlanta, GA (USA), us-southeast-1",
+			}, {
+				Value: "us-ord-1.linodeobjects.com",
+				Help:  "Chicago, IL (USA), us-ord-1",
+			}, {
+				Value: "eu-central-1.linodeobjects.com",
+				Help:  "Frankfurt (Germany), eu-central-1",
+			}, {
+				Value: "it-mil-1.linodeobjects.com",
+				Help:  "Milan (Italy), it-mil-1",
+			}, {
+				Value: "us-east-1.linodeobjects.com",
+				Help:  "Newark, NJ (USA), us-east-1",
+			}, {
+				Value: "fr-par-1.linodeobjects.com",
+				Help:  "Paris (France), fr-par-1",
+			}, {
+				Value: "us-sea-1.linodeobjects.com",
+				Help:  "Seattle, WA (USA), us-sea-1",
+			}, {
+				Value: "ap-south-1.linodeobjects.com",
+				Help:  "Singapore ap-south-1",
+			}, {
+				Value: "se-sto-1.linodeobjects.com",
+				Help:  "Stockholm (Sweden), se-sto-1",
+			}, {
+				Value: "us-iad-1.linodeobjects.com",
+				Help:  "Washington, DC, (USA), us-iad-1",
+			}},
+		}, {
 			// oss endpoints: https://help.aliyun.com/document_detail/31837.html
 			Name:     "endpoint",
 			Help:     "Endpoint for OSS API.",
@@ -1213,7 +1277,7 @@ func init() {
 		}, {
 			Name:     "endpoint",
 			Help:     "Endpoint for S3 API.\n\nRequired when using an S3 clone.",
-			Provider: "!AWS,ArvanCloud,IBMCOS,IDrive,IONOS,TencentCOS,HuaweiOBS,Alibaba,ChinaMobile,GCS,Liara,Scaleway,StackPath,Storj,Synology,RackCorp,Qiniu,Petabox",
+			Provider: "!AWS,ArvanCloud,IBMCOS,IDrive,IONOS,TencentCOS,HuaweiOBS,Alibaba,ChinaMobile,GCS,Liara,Linode,Scaleway,StackPath,Storj,Synology,RackCorp,Qiniu,Petabox",
 			Examples: []fs.OptionExample{{
 				Value:    "objects-us-east-1.dream.io",
 				Help:     "Dream Objects endpoint",
@@ -1701,7 +1765,7 @@ func init() {
 		}, {
 			Name:     "location_constraint",
 			Help:     "Location constraint - must be set to match the Region.\n\nLeave blank if not sure. Used when creating buckets only.",
-			Provider: "!AWS,Alibaba,ArvanCloud,HuaweiOBS,ChinaMobile,Cloudflare,IBMCOS,IDrive,IONOS,Leviia,Liara,Qiniu,RackCorp,Scaleway,StackPath,Storj,TencentCOS,Petabox",
+			Provider: "!AWS,Alibaba,ArvanCloud,HuaweiOBS,ChinaMobile,Cloudflare,IBMCOS,IDrive,IONOS,Leviia,Liara,Linode,Qiniu,RackCorp,Scaleway,StackPath,Storj,TencentCOS,Petabox",
 		}, {
 			Name: "acl",
 			Help: `Canned ACL used when creating buckets and storing or copying objects.
@@ -2937,15 +3001,17 @@ func setEndpointValueForIDriveE2(m configmap.Mapper) (err error) {
 // There should be no testing against opt.Provider anywhere in the
 // code except in here to localise the setting of the quirks.
 //
-// These should be differences from AWS S3
+// Run the integration tests to check you have the quirks correct.
+//
+//	go test -v -remote NewS3Provider:
 func setQuirks(opt *Options) {
 	var (
-		listObjectsV2         = true
-		virtualHostStyle      = true
-		urlEncodeListings     = true
-		useMultipartEtag      = true
-		useAcceptEncodingGzip = true
-		mightGzip             = true // assume all providers might gzip until proven otherwise
+		listObjectsV2         = true // Always use ListObjectsV2 instead of ListObjects
+		virtualHostStyle      = true // Use bucket.provider.com instead of putting the bucket in the URL
+		urlEncodeListings     = true // URL encode the listings to help with control characters
+		useMultipartEtag      = true // Set if Etags for multpart uploads are compatible with AWS
+		useAcceptEncodingGzip = true // Set Accept-Encoding: gzip
+		mightGzip             = true // assume all providers might use content encoding gzip until proven otherwise
 	)
 	switch opt.Provider {
 	case "AWS":
@@ -2993,6 +3059,8 @@ func setQuirks(opt *Options) {
 		virtualHostStyle = false
 		urlEncodeListings = false
 		useMultipartEtag = false
+	case "Linode":
+		// No quirks
 	case "LyveCloud":
 		useMultipartEtag = false // LyveCloud seems to calculate multipart Etags differently from AWS
 	case "Minio":
@@ -3115,7 +3183,6 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
-	fs.Debugf(nil, "name = %q, root = %q, opt = %#v", name, root, opt)
 	err = checkUploadChunkSize(opt.ChunkSize)
 	if err != nil {
 		return nil, fmt.Errorf("s3: chunk size: %w", err)
@@ -3644,6 +3711,7 @@ type listOpt struct {
 	findFile      bool    // if set, it will look for files called (bucket, directory)
 	versionAt     fs.Time // if set only show versions <= this time
 	noSkipMarkers bool    // if set return dir marker objects
+	restoreStatus bool    // if set return restore status in listing too
 }
 
 // list lists the objects into the function supplied with the opt
@@ -3682,6 +3750,10 @@ func (f *Fs) list(ctx context.Context, opt listOpt, fn listFn) error {
 		Delimiter: &delimiter,
 		Prefix:    &opt.directory,
 		MaxKeys:   &f.opt.ListChunk,
+	}
+	if opt.restoreStatus {
+		restoreStatus := "RestoreStatus"
+		req.OptionalObjectAttributes = []*string{&restoreStatus}
 	}
 	if f.opt.RequesterPays {
 		req.RequestPayer = aws.String(s3.RequestPayerRequester)
@@ -3796,11 +3868,13 @@ func (f *Fs) list(ctx context.Context, opt listOpt, fn listFn) error {
 					if remote == opt.directory {
 						continue
 					}
-					// process directory markers as directories
-					remote = strings.TrimRight(remote, "/")
 				}
 			}
 			remote = remote[len(opt.prefix):]
+			if isDirectory {
+				// process directory markers as directories
+				remote = strings.TrimRight(remote, "/")
+			}
 			if opt.addBucket {
 				remote = bucket.Join(opt.bucket, remote)
 			}
@@ -4414,11 +4488,11 @@ if not.
     [
         {
             "Status": "OK",
-            "Path": "test.txt"
+            "Remote": "test.txt"
         },
         {
             "Status": "OK",
-            "Path": "test/file4.txt"
+            "Remote": "test/file4.txt"
         }
     ]
 
@@ -4427,6 +4501,46 @@ if not.
 		"priority":    "Priority of restore: Standard|Expedited|Bulk",
 		"lifetime":    "Lifetime of the active copy in days",
 		"description": "The optional description for the job.",
+	},
+}, {
+	Name:  "restore-status",
+	Short: "Show the restore status for objects being restored from GLACIER to normal storage",
+	Long: `This command can be used to show the status for objects being restored from GLACIER
+to normal storage.
+
+Usage Examples:
+
+    rclone backend restore-status s3:bucket/path/to/object
+    rclone backend restore-status s3:bucket/path/to/directory
+    rclone backend restore-status -o all s3:bucket/path/to/directory
+
+This command does not obey the filters.
+
+It returns a list of status dictionaries.
+
+    [
+        {
+            "Remote": "file.txt",
+            "VersionID": null,
+            "RestoreStatus": {
+                "IsRestoreInProgress": true,
+                "RestoreExpiryDate": "2023-09-06T12:29:19+01:00"
+            },
+            "StorageClass": "GLACIER"
+        },
+        {
+            "Remote": "test.pdf",
+            "VersionID": null,
+            "RestoreStatus": {
+                "IsRestoreInProgress": false,
+                "RestoreExpiryDate": "2023-09-06T12:29:19+01:00"
+            },
+            "StorageClass": "DEEP_ARCHIVE"
+        }
+    ]
+`,
+	Opts: map[string]string{
+		"all": "if set then show all objects, not just ones with restore status",
 	},
 }, {
 	Name:  "list-multipart-uploads",
@@ -4504,6 +4618,26 @@ supplied.
 
 It may return "Enabled", "Suspended" or "Unversioned". Note that once versioning
 has been enabled the status can't be set back to "Unversioned".
+`,
+}, {
+	Name:  "set",
+	Short: "Set command for updating the config parameters.",
+	Long: `This set command can be used to update the config parameters
+for a running s3 backend.
+
+Usage Examples:
+
+    rclone backend set s3: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+    rclone rc backend/command command=set fs=s3: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+    rclone rc backend/command command=set fs=s3: -o session_token=X -o access_key_id=X -o secret_access_key=X
+
+The option keys are named as they are in the config file.
+
+This rebuilds the connection to the s3 backend when it is called with
+the new parameters. Only new parameters need be passed as the values
+will default to those currently in use.
+
+It doesn't return anything.
 `,
 }}
 
@@ -4584,6 +4718,9 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 			return out, err
 		}
 		return out, nil
+	case "restore-status":
+		_, all := opt["all"]
+		return f.restoreStatus(ctx, all)
 	case "list-multipart-uploads":
 		return f.listMultipartUploadsAll(ctx)
 	case "cleanup":
@@ -4599,9 +4736,75 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 		return nil, f.CleanUpHidden(ctx)
 	case "versioning":
 		return f.setGetVersioning(ctx, arg...)
+	case "set":
+		newOpt := f.opt
+		err := configstruct.Set(configmap.Simple(opt), &newOpt)
+		if err != nil {
+			return nil, fmt.Errorf("reading config: %w", err)
+		}
+		c, ses, err := s3Connection(f.ctx, &newOpt, f.srv)
+		if err != nil {
+			return nil, fmt.Errorf("updating session: %w", err)
+		}
+		f.c = c
+		f.ses = ses
+		f.opt = newOpt
+		keys := []string{}
+		for k := range opt {
+			keys = append(keys, k)
+		}
+		fs.Logf(f, "Updated config values: %s", strings.Join(keys, ", "))
+		return nil, nil
 	default:
 		return nil, fs.ErrorCommandNotFound
 	}
+}
+
+// Returned from "restore-status"
+type restoreStatusOut struct {
+	Remote        string
+	VersionID     *string
+	RestoreStatus *s3.RestoreStatus
+	StorageClass  *string
+}
+
+// Recursively enumerate the current fs to find objects with a restore status
+func (f *Fs) restoreStatus(ctx context.Context, all bool) (out []restoreStatusOut, err error) {
+	fs.Debugf(f, "all = %v", all)
+	bucket, directory := f.split("")
+	out = []restoreStatusOut{}
+	err = f.list(ctx, listOpt{
+		bucket:        bucket,
+		directory:     directory,
+		prefix:        f.rootDirectory,
+		addBucket:     f.rootBucket == "",
+		recurse:       true,
+		withVersions:  f.opt.Versions,
+		versionAt:     f.opt.VersionAt,
+		restoreStatus: true,
+	}, func(remote string, object *s3.Object, versionID *string, isDirectory bool) error {
+		entry, err := f.itemToDirEntry(ctx, remote, object, versionID, isDirectory)
+		if err != nil {
+			return err
+		}
+		if entry != nil {
+			if o, ok := entry.(*Object); ok && (all || object.RestoreStatus != nil) {
+				out = append(out, restoreStatusOut{
+					Remote:        o.remote,
+					VersionID:     o.versionID,
+					RestoreStatus: object.RestoreStatus,
+					StorageClass:  object.StorageClass,
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// bucket must be present if listing succeeded
+	f.cache.MarkOK(bucket)
+	return out, nil
 }
 
 // listMultipartUploads lists all outstanding multipart uploads for (bucket, key)
@@ -5317,7 +5520,7 @@ type s3ChunkWriter struct {
 //
 // Pass in the remote and the src object
 // You can also use options to hint at the desired chunk size
-func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectInfo, options ...fs.OpenOption) (chunkSizeResult int64, writer fs.ChunkWriter, err error) {
+func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectInfo, options ...fs.OpenOption) (info fs.ChunkWriterInfo, writer fs.ChunkWriter, err error) {
 	// Temporary Object under construction
 	o := &Object{
 		fs:     f,
@@ -5325,7 +5528,7 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 	}
 	ui, err := o.prepareUpload(ctx, src, options)
 	if err != nil {
-		return -1, nil, fmt.Errorf("failed to prepare upload: %w", err)
+		return info, nil, fmt.Errorf("failed to prepare upload: %w", err)
 	}
 
 	//structs.SetFrom(&mReq, req)
@@ -5361,7 +5564,7 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 		return f.shouldRetry(ctx, err)
 	})
 	if err != nil {
-		return -1, nil, fmt.Errorf("create multipart upload failed: %w", err)
+		return info, nil, fmt.Errorf("create multipart upload failed: %w", err)
 	}
 
 	chunkWriter := &s3ChunkWriter{
@@ -5376,8 +5579,13 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 		ui:                   ui,
 		o:                    o,
 	}
+	info = fs.ChunkWriterInfo{
+		ChunkSize:         int64(chunkSize),
+		Concurrency:       o.fs.opt.UploadConcurrency,
+		LeavePartsOnError: o.fs.opt.LeavePartsOnError,
+	}
 	fs.Debugf(o, "open chunk writer: started multipart upload: %v", *mOut.UploadId)
-	return int64(chunkSize), chunkWriter, err
+	return info, chunkWriter, err
 }
 
 // add a part number and etag to the completed parts
@@ -5423,8 +5631,8 @@ func (w *s3ChunkWriter) WriteChunk(ctx context.Context, chunkNumber int, reader 
 	if err != nil {
 		return -1, err
 	}
-	// If no data read, don't write the chunk
-	if currentChunkSize == 0 {
+	// If no data read and not the first chunk, don't write the chunk
+	if currentChunkSize == 0 && chunkNumber != 0 {
 		return 0, nil
 	}
 	md5sumBinary := m.Sum([]byte{})
@@ -5473,7 +5681,7 @@ func (w *s3ChunkWriter) WriteChunk(ctx context.Context, chunkNumber int, reader 
 	return currentChunkSize, err
 }
 
-// Abort the multpart upload
+// Abort the multipart upload
 func (w *s3ChunkWriter) Abort(ctx context.Context) error {
 	err := w.f.pacer.Call(func() (bool, error) {
 		_, err := w.f.c.AbortMultipartUploadWithContext(context.Background(), &s3.AbortMultipartUploadInput{
@@ -5527,10 +5735,8 @@ func (w *s3ChunkWriter) Close(ctx context.Context) (err error) {
 
 func (o *Object) uploadMultipart(ctx context.Context, src fs.ObjectInfo, in io.Reader, options ...fs.OpenOption) (wantETag, gotETag string, versionID *string, ui uploadInfo, err error) {
 	chunkWriter, err := multipart.UploadMultipart(ctx, src, in, multipart.UploadMultipartOptions{
-		Open:              o.fs,
-		Concurrency:       o.fs.opt.UploadConcurrency,
-		LeavePartsOnError: o.fs.opt.LeavePartsOnError,
-		OpenOptions:       options,
+		Open:        o.fs,
+		OpenOptions: options,
 	})
 	if err != nil {
 		return wantETag, gotETag, versionID, ui, err

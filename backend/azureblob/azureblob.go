@@ -71,6 +71,12 @@ const (
 
 var (
 	errCantUpdateArchiveTierBlobs = fserrors.NoRetryError(errors.New("can't update archive tier blob without --azureblob-archive-tier-delete"))
+
+	// Take this when changing or reading metadata.
+	//
+	// It acts as global metadata lock so we don't bloat Object
+	// with an extra lock that will only very rarely be contended.
+	metadataMu sync.Mutex
 )
 
 // Register with Fs
@@ -461,7 +467,7 @@ type Object struct {
 	size       int64             // Size of the object
 	mimeType   string            // Content-Type of the object
 	accessTier blob.AccessTier   // Blob Access Tier
-	meta       map[string]string // blob metadata
+	meta       map[string]string // blob metadata - take metadataMu when accessing
 }
 
 // ------------------------------------------------------------
@@ -955,6 +961,9 @@ func (f *Fs) getBlockBlobSVC(container, containerPath string) *blockblob.Client 
 
 // updateMetadataWithModTime adds the modTime passed in to o.meta.
 func (o *Object) updateMetadataWithModTime(modTime time.Time) {
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+
 	// Make sure o.meta is not nil
 	if o.meta == nil {
 		o.meta = make(map[string]string, 1)
@@ -1486,7 +1495,7 @@ func (f *Fs) deleteContainer(ctx context.Context, containerName string) error {
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	container, directory := f.split(dir)
 	// Remove directory marker file
-	if f.opt.DirectoryMarkers && container != "" && dir != "" {
+	if f.opt.DirectoryMarkers && container != "" && directory != "" {
 		o := &Object{
 			fs:     f,
 			remote: dir + "/",
@@ -1520,7 +1529,10 @@ func (f *Fs) Hashes() hash.Set {
 // Purge deletes all the files and directories including the old versions.
 func (f *Fs) Purge(ctx context.Context, dir string) error {
 	container, directory := f.split(dir)
-	if container == "" || directory != "" {
+	if container == "" {
+		return errors.New("can't purge from root")
+	}
+	if directory != "" {
 		// Delegate to caller if not root of a container
 		return fs.ErrorCantPurge
 	}
@@ -1620,6 +1632,9 @@ func (o *Object) Size() int64 {
 
 // Set o.metadata from metadata
 func (o *Object) setMetadata(metadata map[string]*string) {
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+
 	if len(metadata) > 0 {
 		// Lower case the metadata
 		o.meta = make(map[string]string, len(metadata))
@@ -1644,6 +1659,9 @@ func (o *Object) setMetadata(metadata map[string]*string) {
 
 // Get metadata from o.meta
 func (o *Object) getMetadata() (metadata map[string]*string) {
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+
 	if len(o.meta) == 0 {
 		return nil
 	}
@@ -1855,12 +1873,7 @@ func (o *Object) ModTime(ctx context.Context) (result time.Time) {
 
 // SetModTime sets the modification time of the local fs object
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
-	// Make sure o.meta is not nil
-	if o.meta == nil {
-		o.meta = make(map[string]string, 1)
-	}
-	// Set modTimeKey in it
-	o.meta[modTimeKey] = modTime.Format(timeFormatOut)
+	o.updateMetadataWithModTime(modTime)
 
 	blb := o.getBlobSVC()
 	opt := blob.SetMetadataOptions{}
@@ -1986,7 +1999,7 @@ type azChunkWriter struct {
 //
 // Pass in the remote and the src object
 // You can also use options to hint at the desired chunk size
-func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectInfo, options ...fs.OpenOption) (chunkSizeResult int64, writer fs.ChunkWriter, err error) {
+func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectInfo, options ...fs.OpenOption) (info fs.ChunkWriterInfo, writer fs.ChunkWriter, err error) {
 	// Temporary Object under construction
 	o := &Object{
 		fs:     f,
@@ -1994,7 +2007,7 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 	}
 	ui, err := o.prepareUpload(ctx, src, options)
 	if err != nil {
-		return -1, nil, fmt.Errorf("failed to prepare upload: %w", err)
+		return info, nil, fmt.Errorf("failed to prepare upload: %w", err)
 	}
 
 	// Calculate correct partSize
@@ -2020,7 +2033,7 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 	} else {
 		partSize = chunksize.Calculator(remote, size, blockblob.MaxBlocks, f.opt.ChunkSize)
 		if partSize > fs.SizeSuffix(blockblob.MaxStageBlockBytes) {
-			return -1, nil, fmt.Errorf("can't upload as it is too big %v - takes more than %d chunks of %v", fs.SizeSuffix(size), fs.SizeSuffix(blockblob.MaxBlocks), fs.SizeSuffix(blockblob.MaxStageBlockBytes))
+			return info, nil, fmt.Errorf("can't upload as it is too big %v - takes more than %d chunks of %v", fs.SizeSuffix(size), fs.SizeSuffix(blockblob.MaxBlocks), fs.SizeSuffix(blockblob.MaxStageBlockBytes))
 		}
 		totalParts = int(fs.SizeSuffix(size) / partSize)
 		if fs.SizeSuffix(size)%partSize != 0 {
@@ -2037,8 +2050,13 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 		ui:        ui,
 		o:         o,
 	}
+	info = fs.ChunkWriterInfo{
+		ChunkSize:   int64(partSize),
+		Concurrency: o.fs.opt.UploadConcurrency,
+		//LeavePartsOnError: o.fs.opt.LeavePartsOnError,
+	}
 	fs.Debugf(o, "open chunk writer: started multipart upload")
-	return int64(partSize), chunkWriter, nil
+	return info, chunkWriter, nil
 }
 
 // WriteChunk will write chunk number with reader bytes, where chunk number >= 0
@@ -2101,7 +2119,7 @@ func (w *azChunkWriter) WriteChunk(ctx context.Context, chunkNumber int, reader 
 	return currentChunkSize, err
 }
 
-// Abort the multpart upload.
+// Abort the multipart upload.
 //
 // FIXME it would be nice to delete uncommitted blocks.
 //
@@ -2165,9 +2183,7 @@ var warnStreamUpload sync.Once
 func (o *Object) uploadMultipart(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (ui uploadInfo, err error) {
 	chunkWriter, err := multipart.UploadMultipart(ctx, src, in, multipart.UploadMultipartOptions{
 		Open:        o.fs,
-		Concurrency: o.fs.opt.UploadConcurrency,
 		OpenOptions: options,
-		//LeavePartsOnError: o.fs.opt.LeavePartsOnError,
 	})
 	if err != nil {
 		return ui, err
@@ -2227,8 +2243,10 @@ func (o *Object) prepareUpload(ctx context.Context, src fs.ObjectInfo, options [
 		return ui, fmt.Errorf("can't upload to root - need a container")
 	}
 	// Create parent dir/bucket if not saving directory marker
-	_, isDirMarker := o.meta[dirMetaKey]
-	if !isDirMarker {
+	metadataMu.Lock()
+	_, ui.isDirMarker = o.meta[dirMetaKey]
+	metadataMu.Unlock()
+	if !ui.isDirMarker {
 		err = o.fs.mkdirParent(ctx, o.remote)
 		if err != nil {
 			return ui, err

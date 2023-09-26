@@ -85,6 +85,7 @@ type largeUpload struct {
 	uploads   []*api.GetUploadPartURLResponse // result of get upload URL calls
 	chunkSize int64                           // chunk size to use
 	src       *Object                         // if copying, object we are reading from
+	info      *api.FileInfo                   // final response with info about the object
 }
 
 // newLargeUpload starts an upload of object o from in with metadata in src
@@ -241,7 +242,7 @@ func (up *largeUpload) WriteChunk(ctx context.Context, chunkNumber int, reader i
 		}
 
 		in := newHashAppendingReader(reader, sha1.New())
-		size += int64(in.AdditionalLength())
+		sizeWithHash := size + int64(in.AdditionalLength())
 
 		// Authorization
 		//
@@ -274,7 +275,7 @@ func (up *largeUpload) WriteChunk(ctx context.Context, chunkNumber int, reader i
 				"X-Bz-Part-Number": fmt.Sprintf("%d", chunkNumber+1),
 				sha1Header:         "hex_digits_at_end",
 			},
-			ContentLength: &size,
+			ContentLength: &sizeWithHash,
 		}
 
 		var response api.UploadPartResponse
@@ -352,7 +353,8 @@ func (up *largeUpload) Close(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return up.o.decodeMetaDataFileInfo(&response)
+	up.info = &response
+	return nil
 }
 
 // Abort aborts the large upload

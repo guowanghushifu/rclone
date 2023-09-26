@@ -766,3 +766,14 @@ put them back in again.` >}}
   * Jacob Hands <jacob@gogit.io>
   * hideo aoyama <100831251+boukendesho@users.noreply.github.com>
   * Roberto Ricci <io@r-ricci.it>
+  * Bjørn Smith <bjornsmith@gmail.com>
+  * Alishan Ladhani <8869764+aladh@users.noreply.github.com>
+  * zjx20 <zhoujianxiong2@gmail.com>
+  * Oksana <142890647+oks-maytech@users.noreply.github.com>
+  * Volodymyr Kit <v.kit@maytech.net>
+  * David Pedersen <limero@me.com>
+  * Drew Stinnett <drew@drewlink.com>
+  * Pat Patterson <pat@backblaze.com>
+  * Herby Gillot <herby.gillot@gmail.com>
+  * Nikita Shoshin <shoshin_nikita@fastmail.com>
+  * rinsuki <428rinsuki+git@gmail.com>

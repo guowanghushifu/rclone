@@ -150,6 +150,23 @@ func init() {
 			Help:     "Only show items owned by the login (email address) passed in.",
 			Advanced: true,
 		}, {
+			Name:    "impersonate",
+			Default: "",
+			Help: `Impersonate this user ID when using a service account.
+
+Setting this flag allows rclone, when using a JWT service account, to
+act on behalf of another user by setting the as-user header.
+
+The user ID is the Box identifier for a user. User IDs can found for
+any user via the GET /users endpoint, which is only available to
+admins, or by calling the GET /users/me endpoint with an authenticated
+user session.
+
+See: https://developer.box.com/guides/authentication/jwt/as-user/
+`,
+			Advanced:  true,
+			Sensitive: true,
+		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
@@ -262,6 +279,7 @@ type Options struct {
 	AccessToken   string               `config:"access_token"`
 	ListChunk     int                  `config:"list_chunk"`
 	OwnedBy       string               `config:"owned_by"`
+	Impersonate   string               `config:"impersonate"`
 }
 
 // ItemMeta defines metadata we cache for each Item ID
@@ -449,6 +467,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	// If using an accessToken, set the Authorization header
 	if f.opt.AccessToken != "" {
 		f.srv.SetHeader("Authorization", "Bearer "+f.opt.AccessToken)
+	}
+
+	// If using impersonate set an as-user header
+	if f.opt.Impersonate != "" {
+		f.srv.SetHeader("as-user", f.opt.Impersonate)
 	}
 
 	jsonFile, ok := m.Get("box_config_file")
@@ -1188,6 +1211,10 @@ func (f *Fs) ChangeNotify(ctx context.Context, notifyFunc func(string, fs.EntryT
 			fs.Infof(f, "Failed to get StreamPosition: %s", err)
 		}
 
+		// box can send duplicate Event IDs. Use this map to track and filter
+		// the ones we've already processed.
+		processedEventIDs := make(map[string]time.Time)
+
 		var ticker *time.Ticker
 		var tickerC <-chan time.Time
 		for {
@@ -1215,7 +1242,15 @@ func (f *Fs) ChangeNotify(ctx context.Context, notifyFunc func(string, fs.EntryT
 						continue
 					}
 				}
-				streamPosition, err = f.changeNotifyRunner(ctx, notifyFunc, streamPosition)
+
+				// Garbage collect EventIDs older than 1 minute
+				for eventID, timestamp := range processedEventIDs {
+					if time.Since(timestamp) > time.Minute {
+						delete(processedEventIDs, eventID)
+					}
+				}
+
+				streamPosition, err = f.changeNotifyRunner(ctx, notifyFunc, streamPosition, processedEventIDs)
 				if err != nil {
 					fs.Infof(f, "Change notify listener failure: %s", err)
 				}
@@ -1268,11 +1303,8 @@ func (f *Fs) getFullPath(parentID string, childName string) (fullPath string) {
 	return fullPath
 }
 
-func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.EntryType), streamPosition string) (nextStreamPosition string, err error) {
+func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.EntryType), streamPosition string, processedEventIDs map[string]time.Time) (nextStreamPosition string, err error) {
 	nextStreamPosition = streamPosition
-
-	// box can send duplicate Event IDs; filter any in a single notify run
-	processedEventIDs := make(map[string]bool)
 
 	for {
 		limit := f.opt.ListChunk
@@ -1318,21 +1350,32 @@ func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.
 		var pathsToClear []pathToClear
 		newEventIDs := 0
 		for _, entry := range result.Entries {
-			if entry.EventID == "" || processedEventIDs[entry.EventID] { // missing Event ID, or already saw this one
+			eventDetails := fmt.Sprintf("[%q(%d)|%s|%s|%s|%s]", entry.Source.Name, entry.Source.SequenceID,
+				entry.Source.Type, entry.EventType, entry.Source.ID, entry.EventID)
+
+			if entry.EventID == "" {
+				fs.Debugf(f, "%s ignored due to missing EventID", eventDetails)
 				continue
 			}
-			processedEventIDs[entry.EventID] = true
+			if _, ok := processedEventIDs[entry.EventID]; ok {
+				fs.Debugf(f, "%s ignored due to duplicate EventID", eventDetails)
+				continue
+			}
+			processedEventIDs[entry.EventID] = time.Now()
 			newEventIDs++
 
 			if entry.Source.ID == "" { // missing File or Folder ID
+				fs.Debugf(f, "%s ignored due to missing SourceID", eventDetails)
 				continue
 			}
 			if entry.Source.Type != api.ItemTypeFile && entry.Source.Type != api.ItemTypeFolder { // event is not for a file or folder
+				fs.Debugf(f, "%s ignored due to unsupported SourceType", eventDetails)
 				continue
 			}
 
 			// Only interested in event types that result in a file tree change
 			if _, found := api.FileTreeChangeEventTypes[entry.EventType]; !found {
+				fs.Debugf(f, "%s ignored due to unsupported EventType", eventDetails)
 				continue
 			}
 
@@ -1343,6 +1386,7 @@ func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.
 					// Item in the cache has the same or newer SequenceID than
 					// this event. Ignore this event, it must be old.
 					f.itemMetaCacheMu.Unlock()
+					fs.Debugf(f, "%s ignored due to old SequenceID (%q)", eventDetails, itemMeta.SequenceID)
 					continue
 				}
 
@@ -1364,7 +1408,10 @@ func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.
 			if cachedItemMetaFound {
 				path := f.getFullPath(itemMeta.ParentID, itemMeta.Name)
 				if path != "" {
+					fs.Debugf(f, "%s added old path (%q) for notify", eventDetails, path)
 					pathsToClear = append(pathsToClear, pathToClear{path: path, entryType: entryType})
+				} else {
+					fs.Debugf(f, "%s old parent not cached", eventDetails)
 				}
 
 				// If this is a directory, also delete it from the dir cache.
@@ -1388,7 +1435,10 @@ func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.
 			if entry.Source.ItemStatus == api.ItemStatusActive {
 				path := f.getFullPath(entry.Source.Parent.ID, entry.Source.Name)
 				if path != "" {
+					fs.Debugf(f, "%s added new path (%q) for notify", eventDetails, path)
 					pathsToClear = append(pathsToClear, pathToClear{path: path, entryType: entryType})
+				} else {
+					fs.Debugf(f, "%s new parent not found", eventDetails)
 				}
 			}
 		}
