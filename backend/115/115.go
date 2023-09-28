@@ -1174,7 +1174,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		if x, ok := option.(*fs.RangeOption); ok {
 			start := x.Start
 			end := x.End
-			fs.Logf(o.fs, "[SIZE]: %v (MB)", (end - start) /1024 /1024)
+			fs.Logf(o.fs, "TEST [SIZE]: %v (MB)", (end - start) /1024 /1024)
 			lenth := (end - start) / 2
 			for i := 0; i < 2; i++ {
 				switch i {
