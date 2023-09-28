@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -59,6 +61,10 @@ func init() {
 			Help:     "SEID from cookie",
 			Required: true,
 		}, {
+			Name:     "timeout",
+			Help:     "Download more than how long to cancel the download task (base on your vfs read chunk size)",
+			Required: true,
+		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
@@ -80,10 +86,11 @@ func init() {
 
 // Options defines the configguration of this backend
 type Options struct {
-	UID  string               `config:"uid"`
-	CID  string               `config:"cid"`
-	SEID string               `config:"seid"`
-	Enc  encoder.MultiEncoder `config:"encoding"`
+	UID     string               `config:"uid"`
+	CID     string               `config:"cid"`
+	SEID    string               `config:"seid"`
+	Timeout int64                `config:"timeout"`
+	Enc     encoder.MultiEncoder `config:"encoding"`
 }
 
 // Fs represents a remote 115 drive
@@ -95,6 +102,7 @@ type Fs struct {
 	features *fs.Features
 	srv      *rest.Client
 	pacer    *fs.Pacer
+	urlpacer *fs.Pacer
 	cache    *cache.Cache
 }
 
@@ -111,11 +119,86 @@ type Object struct {
 	modTime     time.Time
 }
 
+type Downloader struct {
+	ctx     context.Context
+	cancle  context.CancelFunc
+	timeout int64
+	m       sync.Map
+	client  *http.Client
+	errCh   chan error
+	wg      sync.WaitGroup
+	once    bool
+}
+
+func NewDownloader() *Downloader {
+	var wg sync.WaitGroup
+	var m sync.Map
+	ctx, cancle := context.WithCancel(context.Background())
+	client := &http.Client{}
+	errCh := make(chan error, 2)
+	return &Downloader{ctx, cancle, 0, m, client, errCh, wg, true}
+}
+
+type NewReadCloser struct {
+	r io.Reader
+	d *Downloader
+}
+
+func (nrc *NewReadCloser) Read(p []byte) (n int, err error) {
+	if nrc.d.once {
+		done := make(chan struct{})
+		go func() {
+			nrc.d.wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			break
+		case <-time.After(time.Duration(nrc.d.timeout) * time.Second):
+			nrc.d.cancle()
+			return 0, nrc.d.ctx.Err()
+		}
+		var listreader []io.Reader
+		for i := 0; i < 2; i++ {
+			if v, ok := nrc.d.m.Load(i); ok {
+				if reader, ok := v.(io.Reader); ok {
+					listreader = append(listreader, reader)
+				}
+			}
+		}
+		nrc.r = io.MultiReader(listreader...)
+		nrc.d.once = false
+	}
+	select {
+	case err = <-nrc.d.errCh:
+		fmt.Println("errch get err")
+		return 0, err
+	default:
+		n, err = nrc.r.Read(p)
+		if err != io.EOF {
+			return n, err
+		} else {
+			return 0, err
+		}
+	}
+}
+
+func (nrc *NewReadCloser) Close() error {
+	for i := 0; i < 2; i++ {
+		if _, ok := nrc.d.m.Load(i); ok {
+			nrc.d.m.Store(i, nil)
+		}
+	}
+	if nrc.r != nil {
+		nrc.r = nil
+	}
+	return nil
+}
+
 // shouldRetry returns a boolean as to whether this resp and err
 // deserve to be retried.  It returns the err as a convenience
 func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
 	// TODO: impl
-	// fs.Errorf(nil, "Should retry: %v", err)
 	return false, err
 }
 
@@ -135,13 +218,14 @@ func NewFs(ctx context.Context, name string, root string, m configmap.Mapper) (f
 	}
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
-		name:  name,
-		root:  root,
-		opt:   *opt,
-		ci:    ci,
-		srv:   rest.NewClient(&http.Client{}),
-		pacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
-		cache: cache.New(time.Minute, time.Minute*2),
+		name:     name,
+		root:     root,
+		opt:      *opt,
+		ci:       ci,
+		srv:      rest.NewClient(&http.Client{}),
+		pacer:    fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
+		urlpacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
+		cache:    cache.New(time.Minute, time.Minute*2),
 	}
 	f.srv.SetErrorHandler(func(resp *http.Response) error {
 		body, err := rest.ReadBody(resp)
@@ -789,7 +873,7 @@ func (f *Fs) getURL(ctx context.Context, remote string, pickCode string) (string
 	var err error
 	var info api.GetURLResponse
 	var resp *http.Response
-	err = f.pacer.Call(func() (bool, error) {
+	err = f.urlpacer.Call(func() (bool, error) {
 		resp, err = f.srv.CallJSON(ctx, &opts, nil, &info)
 		return shouldRetry(ctx, resp, err)
 	})
@@ -1016,39 +1100,109 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	return o.sha1sum, nil
 }
 
+func bufRead(ctx context.Context, rs io.ReadCloser, i int, d *Downloader) {
+	defer d.wg.Done()
+	var body []byte
+	var err error
+	once := make(chan bool)
+	go func() {
+		once <- true
+	}()
+	done := make(chan bool)
+	for {
+		select {
+		case <-ctx.Done():
+			rs.Close()
+			return
+		case <-once:
+			go func() {
+				defer rs.Close()
+				body, err = ioutil.ReadAll(rs)
+				done <- true
+				if err == nil {
+					d.m.Store(i, bytes.NewBuffer(body))
+					return
+				} else {
+					d.errCh <- err
+					return
+				}
+			}()
+		case <-done:
+			return
+		}
+	}
+}
+
+func (o *Object) download(url string, d *Downloader, i int, ran string) {
+	ck := fmt.Sprintf("UID=%s;SEID=%s;CID=%s;", o.fs.opt.UID, o.fs.opt.SEID, o.fs.opt.CID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fs.Logf(o.fs, "Error creating request:", err)
+		return
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("cookie", ck)
+	req.Header.Set("Range", fmt.Sprintf("%s=%s", "bytes", ran))
+	//var request http.Request
+	//ctx := context.WithValue(d.ctx, request, req)
+	resp, err := d.client.Do(req)
+	if err != nil {
+		fs.Logf(o.fs, "Error sending request:", err)
+		return
+	}
+	for resp.StatusCode != 206 {
+		time.Sleep(1 * time.Second)
+		resp.Body.Close()
+		resp, err = d.client.Do(req)
+		fs.Logf(o.fs, "repeatrequest:", resp.StatusCode, "Header:", req.Header)
+	}
+	go bufRead(d.ctx, resp.Body, i, d)
+}
+
 // Open opens the file for read.  Call Close() on the returned io.ReadCloser
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	fs.Logf(o.fs, "open %v, options: %v", o.remote, options)
+	targetURL, err := o.fs.getURL(ctx, o.remote, o.pickCode)
+	if err != nil {
+		fs.Logf(o.fs, "url err: ", err)
+		return nil, err
+	}
+	fs.FixRangeOption(options, o.size)
+	var ranges []string
 	for _, option := range options {
 		if x, ok := option.(*fs.RangeOption); ok {
 			start := x.Start
 			end := x.End
-			size := (end - start)/1024/1024
-			fs.Logf(o.fs, "[SIZE]: %v (MB)", size)
+			fs.Logf(o.fs, "[SIZE]: %v (MB)", (end - start) /1024 /1024)
+			lenth := (end - start) / 2
+			for i := 0; i < 2; i++ {
+				switch i {
+				case 0:
+					x := fmt.Sprintf("%d-%d", start, start+lenth)
+					ranges = append(ranges, x)
+				case 1:
+					x := fmt.Sprintf("%d-%d", start+1, end)
+					ranges = append(ranges, x)
+				default:
+					x := fmt.Sprintf("%d-%d", start+1, start+lenth)
+					ranges = append(ranges, x)
+				}
+				start = start + lenth
+			}
 		}
 	}
-
-	targetURL, err := o.fs.getURL(ctx, o.remote, o.pickCode)
-	if err != nil {
-		return nil, err
+	d := NewDownloader()
+	d.timeout = o.fs.opt.Timeout
+	fs.Logf(o.fs, "range:", ranges)
+	for i, v := range ranges {
+		d.wg.Add(1)
+		go o.download(targetURL, d, i, v)
 	}
-	fs.FixRangeOption(options, o.size)
-	opts := rest.Opts{
-		Method:  http.MethodGet,
-		RootURL: targetURL,
-		Options: options,
-	}
-
-	var resp *http.Response
-	err = o.fs.pacer.Call(func() (bool, error) {
-		resp, err = o.fs.srv.Call(ctx, &opts)
-		return shouldRetry(ctx, resp, err)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.Body, err
+	in = &NewReadCloser{
+		r: nil,
+		d: d}
+	return in, nil
 }
 
 // Remove this object
